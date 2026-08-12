@@ -950,10 +950,27 @@ footer{
 <main id="app"></main>
 <div id="saveToast" style="display:none; position:fixed; left:50%; bottom:22px; transform:translateX(-50%); background:var(--pine); color:#fff9ec; padding:9px 18px; border-radius:999px; font-size:12.5px; font-weight:700; box-shadow:0 4px 14px rgba(0,0,0,.18); z-index:100; white-space:nowrap;">已自動儲存 ✓</div>
 <div id="storageWarning" style="display:none; margin:0 14px 14px; padding:11px 14px; background:#f5e4da; border:1px solid var(--red); border-radius:10px; color:var(--red); font-size:12.5px; line-height:1.6;">
-  ⚠️ 目前在 Claude App／網站內開啟，自動儲存不一定穩定。建議每次修改完，記得按「匯出備份」存一份。<br>最穩定的做法：把這個檔案<b>下載到手機、用瀏覽器直接打開</b>（不透過 Claude App），這樣就會自動穩定存檔，不用再手動匯出匯入。
+  ⚠️ 目前連不上雲端資料庫，請檢查網路連線。
 </div>
 
-<footer>資料自動即時儲存（下載後於瀏覽器開啟時最穩定）· 僅您本人可見</footer>
+<footer>資料自動即時儲存於雲端 · 任何裝置開啟此網址都會看到最新內容</footer>
+
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
+<script>
+/* ================= FIREBASE (雲端資料庫，跨裝置同步用) ================= */
+const firebaseConfig = {
+  apiKey: "AIzaSyCrXcBa_zdfFtlI6_pGE0VfwrY9tCCTzn8",
+  authDomain: "italy-trip-2026-898a3.firebaseapp.com",
+  projectId: "italy-trip-2026-898a3",
+  storageBucket: "italy-trip-2026-898a3.firebasestorage.app",
+  messagingSenderId: "597864387297",
+  appId: "1:597864387297:web:421585b331134f56a99da0"
+};
+firebase.initializeApp(firebaseConfig);
+const db = firebase.firestore();
+const TRIP_DOC = db.collection('trip').doc('main');
+</script>
 
 <script>
 /* ================= DATA ================= */
@@ -1350,30 +1367,23 @@ days.forEach(d=>{
 });
 
 /* ================= STORAGE =================
-   Layered strategy:
-   1) localStorage — works when this file is downloaded and opened directly
-      in a normal mobile browser (Files app → open in Safari/Chrome). This is
-      the recommended way to maintain data day-to-day once the itinerary is finalized.
-   2) window.storage — Claude artifact cloud storage, used as a fallback when
-      viewing this inside the Claude app/site.
-   3) memory only — if neither works, show a warning and rely on manual export/import.
+   雲端儲存（Firebase Firestore）：所有裝置打開這個網址，讀寫的都是同一份資料。
+   - loadStore()：頁面開啟時，從雲端抓一次目前資料，並訂閱即時更新
+     （如果你在手機上新增一筆花費，電腦畫面幾秒內會自動跟著更新，不用重新整理）。
+   - doSaveNow()：任何新增/編輯動作，都會即時寫回雲端。
+   若網路不通或 Firestore 讀寫失敗，會在畫面上顯示警告，資料先留在記憶體中，
+   等網路恢復、下次寫入時會自動再試。
 */
 let store = {journal:{}, expenses:{}, pretrip:[], fxRate:34, outdoorMode:false, packing:{}, outfitLog:{}};
 let saveTimer=null;
-let storageMode = 'none'; // 'local' | 'cloud' | 'none'
-const LS_KEY = 'italy-trip-data-2026';
+let storageMode = 'cloud';
+let suppressNextSnapshot = false; // avoid re-render loop when we just wrote data ourselves
 
-function detectLocalStorage(){
-  try{
-    const t = '__test__';
-    localStorage.setItem(t, '1');
-    localStorage.removeItem(t);
-    return true;
-  }catch(e){ return false; }
-}
-function showStorageWarning(){
+function showStorageWarning(msg){
   const el = document.getElementById('storageWarning');
-  if(el) el.style.display = 'block';
+  if(!el) return;
+  if(msg) el.innerHTML = msg;
+  el.style.display = 'block';
 }
 function hideStorageWarning(){
   const el = document.getElementById('storageWarning');
@@ -1381,34 +1391,34 @@ function hideStorageWarning(){
 }
 
 async function loadStore(){
-  if(detectLocalStorage()){
-    storageMode = 'local';
-    hideStorageWarning();
-    const raw = localStorage.getItem(LS_KEY);
-    if(raw){
-      try{ store = Object.assign({journal:{}, expenses:{}, pretrip:[], fxRate:34, outdoorMode:false, packing:{}, outfitLog:{}}, JSON.parse(raw)); }
-      catch(e){ store.pretrip = pretripDefaults.slice(); }
+  try{
+    const snap = await TRIP_DOC.get();
+    if(snap.exists){
+      store = Object.assign({journal:{}, expenses:{}, pretrip:[], fxRate:34, outdoorMode:false, packing:{}, outfitLog:{}}, snap.data());
     } else {
       store.pretrip = pretripDefaults.slice();
-      queueSave(true);
+      await TRIP_DOC.set(store);
     }
-  } else if(typeof window.storage !== 'undefined'){
-    storageMode = 'cloud';
-    showStorageWarning(); // still warn: cloud mode has proven unreliable in the Claude app
-    try{
-      const r = await window.storage.get('trip-data', false);
-      if(r && r.value) store = Object.assign({journal:{}, expenses:{}, pretrip:[], fxRate:34, outdoorMode:false, packing:{}, outfitLog:{}}, JSON.parse(r.value));
-      else { store.pretrip = pretripDefaults.slice(); queueSave(true); }
-    }catch(e){
-      store.pretrip = pretripDefaults.slice();
-      queueSave(true);
-    }
-  } else {
-    storageMode = 'none';
-    showStorageWarning();
+    hideStorageWarning();
+  }catch(e){
     store.pretrip = pretripDefaults.slice();
+    showStorageWarning('⚠️ 目前連不上雲端資料庫，請檢查網路連線後重新整理頁面。新增的內容暫時只留在這個畫面，重新整理可能會遺失。');
   }
   migrateStore();
+
+  // 即時同步：其他裝置寫入資料後，這裡會自動收到更新並重新畫面
+  TRIP_DOC.onSnapshot((snap)=>{
+    if(suppressNextSnapshot){ suppressNextSnapshot = false; return; }
+    if(!snap.exists) return;
+    store = Object.assign({journal:{}, expenses:{}, pretrip:[], fxRate:34, outdoorMode:false, packing:{}, outfitLog:{}}, snap.data());
+    if(typeof mainTab !== 'undefined'){
+      if(mainTab==='expense') renderExpenseTab();
+      else if(mainTab==='itinerary' && typeof currentView==='number') renderDay(currentView);
+      else if(mainTab==='accom') renderAccomTab();
+    }
+  }, (err)=>{
+    showStorageWarning('⚠️ 目前連不上雲端資料庫，請檢查網路連線。');
+  });
 }
 function migrateStore(){
   // one-time cleanup: rename old category labels in already-saved data
@@ -1421,15 +1431,10 @@ function migrateStore(){
   if(changed) queueSave(true);
 }
 function doSaveNow(){
-  if(storageMode === 'local'){
-    try{ localStorage.setItem(LS_KEY, JSON.stringify(store)); flashSaved(); }
-    catch(e){ showStorageWarning(); }
-  } else if(storageMode === 'cloud'){
-    window.storage.set('trip-data', JSON.stringify(store), false)
-      .then(()=>flashSaved())
-      .catch(()=>showStorageWarning());
-  }
-  // storageMode === 'none': nothing to do, rely on manual export
+  suppressNextSnapshot = true;
+  TRIP_DOC.set(store)
+    .then(()=>flashSaved())
+    .catch(()=>{ suppressNextSnapshot=false; showStorageWarning('⚠️ 儲存失敗，請檢查網路連線後再試一次。'); });
 }
 function queueSave(immediate){
   clearTimeout(saveTimer);
