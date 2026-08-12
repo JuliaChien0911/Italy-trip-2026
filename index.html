@@ -594,6 +594,13 @@ main{
   min-height:40px;
 }
 
+.locked-field{
+  opacity:.5;
+  cursor:not-allowed !important;
+  pointer-events:none;
+  filter:grayscale(40%);
+}
+
 .btn-add{
   background:var(--gold);
   color:#fff;
@@ -1512,7 +1519,34 @@ auth.onAuthStateChanged((user)=>{
   isEditor = !!user;
   const btn = document.getElementById('loginBtn');
   if(btn) btn.textContent = isEditor ? '✅ 編輯模式（點擊登出）' : '🔒 登入編輯';
+  applyEditLock();
 });
+
+/* ================= 唯讀模式鎖定 =================
+   未登入時，把畫面上所有輸入框/打勾格/新增按鈕都鎖住（灰底、不可點擊），
+   一眼就能看出目前是唯讀模式。使用 MutationObserver 監看畫面內容，
+   只要畫面一有更新（切換分頁、切換日期等）就自動重新套用鎖定，
+   不用在每個 render 函式裡個別呼叫。
+*/
+function applyEditLock(){
+  const root = document.getElementById('app');
+  if(!root) return;
+  root.querySelectorAll('input, textarea, select').forEach(el=>{
+    el.disabled = !isEditor;
+    el.classList.toggle('locked-field', !isEditor);
+  });
+  root.querySelectorAll('.btn-add, .btn-del').forEach(el=>{
+    el.disabled = !isEditor;
+    el.classList.toggle('locked-field', !isEditor);
+  });
+  root.querySelectorAll('[onclick^="togglePacking"]').forEach(el=>{
+    el.classList.toggle('locked-field', !isEditor);
+  });
+}
+const appRoot = document.getElementById('app');
+if(appRoot){
+  new MutationObserver(()=>applyEditLock()).observe(appRoot, {childList:true, subtree:true});
+}
 
 /* ================= HELPERS ================= */
 function navUrl(day){
