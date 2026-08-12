@@ -949,6 +949,22 @@ footer{
 
 <main id="app"></main>
 <div id="saveToast" style="display:none; position:fixed; left:50%; bottom:22px; transform:translateX(-50%); background:var(--pine); color:#fff9ec; padding:9px 18px; border-radius:999px; font-size:12.5px; font-weight:700; box-shadow:0 4px 14px rgba(0,0,0,.18); z-index:100; white-space:nowrap;">已自動儲存 ✓</div>
+
+<button id="loginBtn" onclick="openLoginModal()" style="position:fixed; right:12px; bottom:16px; z-index:99; background:#fff; border:1px solid #ccc; border-radius:999px; padding:8px 14px; font-size:12px; font-weight:700; box-shadow:0 2px 8px rgba(0,0,0,.12); cursor:pointer;">🔒 登入編輯</button>
+
+<div id="loginModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.4); z-index:200; align-items:center; justify-content:center;">
+  <div style="background:#fff; border-radius:14px; padding:22px; width:88%; max-width:320px; box-shadow:0 8px 30px rgba(0,0,0,.25);">
+    <div id="loginModalTitle" style="font-weight:800; font-size:15px; margin-bottom:12px;">登入以編輯資料</div>
+    <input id="loginEmail" type="email" placeholder="Email" style="width:100%; padding:9px 10px; margin-bottom:8px; border:1px solid #ccc; border-radius:8px; font-size:13px; box-sizing:border-box;">
+    <input id="loginPass" type="password" placeholder="密碼" style="width:100%; padding:9px 10px; margin-bottom:10px; border:1px solid #ccc; border-radius:8px; font-size:13px; box-sizing:border-box;">
+    <div id="loginError" style="display:none; color:var(--red); font-size:12px; margin-bottom:8px;"></div>
+    <div style="display:flex; gap:8px;">
+      <button onclick="doLogin()" style="flex:1; background:var(--pine); color:#fff; border:none; border-radius:8px; padding:10px; font-weight:700; font-size:13px; cursor:pointer;">登入</button>
+      <button onclick="closeLoginModal()" style="flex:1; background:#eee; border:none; border-radius:8px; padding:10px; font-weight:700; font-size:13px; cursor:pointer;">取消</button>
+    </div>
+  </div>
+</div>
+
 <div id="storageWarning" style="display:none; margin:0 14px 14px; padding:11px 14px; background:#f5e4da; border:1px solid var(--red); border-radius:10px; color:var(--red); font-size:12.5px; line-height:1.6;">
   ⚠️ 目前連不上雲端資料庫，請檢查網路連線。
 </div>
@@ -957,8 +973,9 @@ footer{
 
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
 <script>
-/* ================= FIREBASE (雲端資料庫，跨裝置同步用) ================= */
+/* ================= FIREBASE (雲端資料庫 + 登入權限管理) ================= */
 const firebaseConfig = {
   apiKey: "AIzaSyCrXcBa_zdfFtlI6_pGE0VfwrY9tCCTzn8",
   authDomain: "italy-trip-2026-898a3.firebaseapp.com",
@@ -969,7 +986,9 @@ const firebaseConfig = {
 };
 firebase.initializeApp(firebaseConfig);
 const db = firebase.firestore();
+const auth = firebase.auth();
 const TRIP_DOC = db.collection('trip').doc('main');
+let isEditor = false; // true only after successful login — gates every write action
 </script>
 
 <script>
@@ -1457,6 +1476,44 @@ function flashSaved(){
   toastTimer = setTimeout(()=>{ el.style.display = 'none'; }, 1600);
 }
 
+/* ================= AUTH（登入權限） ================= */
+function openLoginModal(){
+  if(isEditor){
+    if(confirm('要登出編輯模式嗎？登出後就只能瀏覽，無法新增或修改內容。')){
+      auth.signOut();
+    }
+    return;
+  }
+  document.getElementById('loginError').style.display = 'none';
+  document.getElementById('loginModal').style.display = 'flex';
+}
+function closeLoginModal(){
+  document.getElementById('loginModal').style.display = 'none';
+}
+function doLogin(){
+  const email = document.getElementById('loginEmail').value.trim();
+  const pass = document.getElementById('loginPass').value;
+  const errEl = document.getElementById('loginError');
+  errEl.style.display = 'none';
+  if(!email || !pass) return;
+  auth.signInWithEmailAndPassword(email, pass)
+    .then(()=>{ closeLoginModal(); })
+    .catch((e)=>{
+      errEl.textContent = '登入失敗，請確認帳號密碼是否正確。';
+      errEl.style.display = 'block';
+    });
+}
+function requireEditor(){
+  if(isEditor) return true;
+  openLoginModal();
+  return false;
+}
+auth.onAuthStateChanged((user)=>{
+  isEditor = !!user;
+  const btn = document.getElementById('loginBtn');
+  if(btn) btn.textContent = isEditor ? '✅ 編輯模式（點擊登出）' : '🔒 登入編輯';
+});
+
 /* ================= HELPERS ================= */
 function navUrl(day){
   if(day.lat && day.lng) return `https://www.google.com/maps/dir/?api=1&destination=${day.lat},${day.lng}`;
@@ -1782,6 +1839,7 @@ function tipsPackingPanel(){
   return `<div class="card">${html}</div>`;
 }
 function togglePacking(key){
+  if(!requireEditor()) return;
   store.packing[key] = !store.packing[key];
   queueSave(true);
   renderTipsTab();
@@ -2227,6 +2285,7 @@ function renderDay(n){
 
 let outfitTimer=null;
 function onOutfitInput(n){
+  if(!requireEditor()) return;
   const temp = document.getElementById(`outfit-temp-${n}`).value;
   const cond = document.getElementById(`outfit-cond-${n}`).value;
   store.outfitLog[n] = {temp, cond};
@@ -2268,6 +2327,7 @@ function goFood(){ mainTab='food'; currentView='landing'; renderMainTabs(); rend
 function goDay(n){ mainTab='itinerary'; currentView=n; renderMainTabs(); renderRail(); renderDay(n); window.scrollTo(0,0); }
 
 function addExpense(n){
+  if(!requireEditor()) return;
   const cat = document.getElementById(`exp-cat-${n}`).value;
   const amt = document.getElementById(`exp-amt-${n}`).value;
   const cur = document.getElementById(`exp-cur-${n}`).value;
@@ -2279,11 +2339,13 @@ function addExpense(n){
   renderDay(n);
 }
 function removeExpense(n, idx){
+  if(!requireEditor()) return;
   store.expenses[n].splice(idx,1);
   queueSave(true);
   renderDay(n);
 }
 function addPretrip(){
+  if(!requireEditor()) return;
   const cat = document.getElementById('pt-cat').value;
   const amt = document.getElementById('pt-amt').value;
   const cur = document.getElementById('pt-cur').value;
@@ -2294,17 +2356,20 @@ function addPretrip(){
   renderExpenseTab();
 }
 function removePretrip(idx){
+  if(!requireEditor()) return;
   store.pretrip.splice(idx,1);
   queueSave(true);
   renderExpenseTab();
 }
 function updateFx(v){
+  if(!requireEditor()){ renderExpenseTab(); return; }
   store.fxRate = Number(v)||34;
   queueSave(true);
   renderExpenseTab();
 }
 let journalTimer=null;
 function onJournalInput(n){
+  if(!requireEditor()) return;
   const val = document.getElementById(`journal-${n}`).value;
   store.journal[n] = val;
   clearTimeout(journalTimer);
@@ -2332,6 +2397,7 @@ function showImportBanner(msg, ok){
 document.getElementById('importFile').addEventListener('change', (e)=>{
   const file = e.target.files[0];
   if(!file) return;
+  if(!requireEditor()){ e.target.value=''; return; }
   const reader = new FileReader();
   reader.onload = (ev)=>{
     try{
